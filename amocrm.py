@@ -76,9 +76,16 @@ class BaseEntity:
         return str(self)
 
     def get_field(self, field_name):
-        return self.custom_fields_values.get(field_name, {}).get('value')
+        if not self.custom_fields_values:
+            return None
+        field_data = self.custom_fields_values.get(field_name)
+        if not isinstance(field_data, dict):
+            return None
+        return field_data.get('value')
 
     def set_field(self, field_name, field_value, field_id=None):
+        if self.custom_fields_values is None:
+            self.custom_fields_values = {}
         custom_field = self.custom_fields_values.get(field_name)
         if custom_field is None:
             if field_id is None:
@@ -95,6 +102,9 @@ class BaseEntity:
 
     def get_url(self):
         return self.url
+
+    def as_dict(self) -> dict:
+        return {k: v for k, v in self.__dict__.items() if not k.startswith('_') or k == '_embedded'}
 
 
 class Customer(BaseEntity):
@@ -142,7 +152,7 @@ class Customer(BaseEntity):
         self.purchases_count = purchases_count
         self.average_check = average_check
         self.account_id = account_id
-        self.custom_fields_values = custom_fields_values
+        self.custom_fields_values = custom_fields_values or {}
         self._embedded = _embedded
 
         self.companies = []
@@ -200,13 +210,19 @@ class Lead(BaseEntity):
         self.is_deleted = is_deleted
         self.score = score
         self.account_id = account_id
-        self.custom_fields_values = custom_fields_values
+        self.custom_fields_values = custom_fields_values or {}
         self._embedded = _embedded
         self.tags = []
         self.contacts = []
         self.companies = []
         if not _embedded:
             return
+        if _embedded.get(TAGS):
+            self.tags = _embedded.get(TAGS)
+        if _embedded.get(CONTACTS):
+            self.contacts = _embedded.get(CONTACTS)
+        if _embedded.get(COMPANIES):
+            self.companies = _embedded.get(COMPANIES)
 
 
 def amocrm_get(obj_cls: Type[BaseEntity],
@@ -233,7 +249,7 @@ def amocrm_get(obj_cls: Type[BaseEntity],
         else:
             params['with'] = _with
     if query:
-        params[f'query'] = query
+        params['query'] = query
 
     headers = {}
     base_url = ""
@@ -253,7 +269,6 @@ def amocrm_get(obj_cls: Type[BaseEntity],
                 except AmoCrmRepeatError as e:
                     if try_attempt >= 3:
                         raise e
-                    # повторить тот же запрос (тот же url, params), без нового get() с начала
                 except AmoCrmNoConten:
                     raise
                 except Exception as e:
@@ -267,26 +282,18 @@ def amocrm_get(obj_cls: Type[BaseEntity],
                 counter += 1
                 skip_entity = False
                 if custom_filter:
-                    # if custom filter is not None then check custom field,
-                    # if at least one not equal filter, set skip_entity value True and break checker
-                    #
                     for key, value in custom_filter.items():
                         if entity.get_field(key) != value:
                             skip_entity = True
                             break
-                # check if should pass entity
-                if skip_entity:
-                    pass
-                else:
+                if not skip_entity:
                     yield entity
 
-            # condition to stop while loop
             if page:
                 break
             if counter < limit:
                 break
             time.sleep(1)
-            # reset url and params for page iteration
             url = json_data['_links']['next']['href']
             params = {}
 
